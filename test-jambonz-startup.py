@@ -16,12 +16,24 @@ Usage:
     python test-mini.py --host 10.0.2.10 --key ~/.ssh/my-key.pem --variant sip-rtp
 
     # All variants: mini, fs, sip, rtp, sip-rtp, web, web-monitoring, monitoring, recording
+
+    # Test an open-source build (different PM2 app names)
+    python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant mini --oss
 """
 
 import argparse
 import subprocess
 import sys
 import json
+
+# Map from commercial PM2 app names to open-source equivalents
+OSS_PM2_NAMES = {
+    "api-server": "jambonz-api-server",
+    "webapp": "jambonz-webapp",
+    "feature-server": "jambonz-feature-server",
+    "inbound": "sbc-inbound",
+    "outbound": "sbc-outbound",
+}
 
 # Per-variant definitions: system services, PM2 apps, listening ports
 VARIANTS = {
@@ -59,7 +71,7 @@ VARIANTS = {
     "sip": {
         "services": ["drachtio"],
         "pm2": [
-            "sbc-call-router", "sbc-sip-sidecar", "sbc-rtpengine-sidecar",
+            "sbc-call-router", "sbc-sip-sidecar",
             "outbound", "inbound",
         ],
         "ports": [
@@ -72,9 +84,7 @@ VARIANTS = {
     "rtp": {
         "services": ["rtpengine"],
         "pm2": ["sbc-rtpengine-sidecar"],
-        "ports": [
-            (22222, "rtpengine"),
-        ],
+        "ports": [],
     },
     "sip-rtp": {
         "services": ["drachtio", "rtpengine"],
@@ -86,7 +96,6 @@ VARIANTS = {
             (5060, "SIP UDP/TCP"),
             (8443, "SIP WSS"),
             (9022, "drachtio"),
-            (22222, "rtpengine"),
             (4000, "sbc-call-router"),
         ],
     },
@@ -96,7 +105,7 @@ VARIANTS = {
         "ports": [
             (80, "nginx HTTP"),
             (443, "nginx HTTPS"),
-            (3002, "api-server"),
+            (3000, "api-server"),
         ],
     },
     "web-monitoring": {
@@ -109,7 +118,7 @@ VARIANTS = {
         "ports": [
             (80, "nginx HTTP"),
             (443, "nginx HTTPS"),
-            (3002, "api-server"),
+            (3000, "api-server"),
             (3010, "grafana"),
             (9080, "homer"),
         ],
@@ -135,14 +144,14 @@ def run_ssh(host, key, user, command, timeout=30):
     """Run a command over SSH. Returns (stdout, exit_code)."""
     cmd = [
         "ssh",
-        "-i", key,
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", f"ConnectTimeout={timeout}",
         "-o", "LogLevel=ERROR",
-        f"{user}@{host}",
-        command
     ]
+    if key:
+        cmd += ["-i", key]
+    cmd += [f"{user}@{host}", command]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return result.stdout, result.returncode
@@ -163,16 +172,25 @@ def check(label, passed, detail=""):
 def main():
     parser = argparse.ArgumentParser(description="Test jambonz instance startup")
     parser.add_argument("--host", required=True, help="Instance IP or hostname")
-    parser.add_argument("--key", required=True, help="Path to SSH private key")
-    parser.add_argument("--user", default="jambonz", help="SSH user (default: jambonz)")
+    parser.add_argument("--key", help="Path to SSH private key (omit to use default SSH key)")
+    parser.add_argument("--user", help="SSH user (default: jambonz, or admin with --oss)")
     parser.add_argument("--variant", default="mini",
                         choices=list(VARIANTS.keys()),
                         help="Instance variant (default: mini)")
+    parser.add_argument("--oss", action="store_true",
+                        help="Open-source build (different PM2 app names)")
     parser.add_argument("--timeout", type=int, default=300,
                         help="Timeout for cloud-init wait (default: 300)")
     args = parser.parse_args()
 
+    if args.user is None:
+        args.user = "admin" if args.oss else "jambonz"
+
     variant = VARIANTS[args.variant]
+    # Remap PM2 names for open-source builds
+    if args.oss:
+        variant = dict(variant)
+        variant["pm2"] = [OSS_PM2_NAMES.get(name, name) for name in variant["pm2"]]
     passed = 0
     failed = 0
     total = 0
@@ -188,7 +206,8 @@ def main():
     ssh = lambda cmd, t=30: run_ssh(args.host, args.key, args.user, cmd, t)
 
     print("=" * 60)
-    print(f"jambonz {args.variant} startup test — {args.host}")
+    edition = "oss" if args.oss else "commercial"
+    print(f"jambonz {args.variant} ({edition}) startup test — {args.host}")
     print("=" * 60)
 
     # 1. SSH connectivity

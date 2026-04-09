@@ -26,6 +26,44 @@ python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant
 python test-jambonz-startup.py --host 10.0.2.10 --key ~/.ssh/my-key.pem --variant sip-rtp
 ```
 
+**Open-source builds:**
+
+```bash
+# Test an open-source feature server (different PM2 names, SSH user defaults to admin)
+python test-jambonz-startup.py --host 18.204.245.251 --variant fs --oss
+```
+
+```
+$ python test-jambonz-startup.py --host 18.204.245.251  --variant fs --oss
+============================================================
+jambonz fs (oss) startup test — 18.204.245.251
+============================================================
+
+--- SSH Connectivity ---
+  ✅ SSH connection — ok
+
+--- Cloud-Init ---
+  ✅ cloud-init completed
+
+--- System Services ---
+  ✅ drachtio — active
+  ✅ freeswitch — active
+
+--- PM2 Services ---
+  ✅ pm2: jambonz-feature-server — online
+
+--- Ports ---
+  ✅ port 3000 (feature-server)
+  ✅ port 8021 (freeswitch ESL)
+  ✅ port 9022 (drachtio)
+
+============================================================
+Results: 8/8 passed, 0 failed
+============================================================
+```
+
+> With `--oss`, PM2 app names are remapped (e.g. `api-server` → `jambonz-api-server`, `inbound` → `sbc-inbound`) and the default SSH user is `admin` instead of `jambonz`.
+
 **Supported variants:**
 
 | Variant | Description |
@@ -100,6 +138,7 @@ Results: 25/27 passed, 2 failed
 | `--key` | (required) | Path to SSH private key |
 | `--user` | `jambonz` | SSH username |
 | `--variant` | `mini` | Instance variant to test |
+| `--oss` | off | Open-source build (different PM2 names, default user `admin`) |
 | `--timeout` | `300` | Timeout in seconds for cloud-init wait |
 
 ## Related repositories
