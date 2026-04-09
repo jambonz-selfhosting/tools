@@ -30,6 +30,7 @@ VARIANTS = {
             "nginx", "drachtio", "freeswitch", "rtpengine",
             "mysql", "redis-server", "influxdb", "telegraf",
             "heplify-server", "cassandra",
+            "jaeger-collector", "jaeger-query",
         ],
         "pm2": [
             "api-server", "webapp", "feature-server",
@@ -102,6 +103,7 @@ VARIANTS = {
         "services": [
             "nginx", "influxdb", "telegraf", "grafana-server",
             "heplify-server", "cassandra",
+            "jaeger-collector", "jaeger-query",
         ],
         "pm2": ["api-server", "webapp"],
         "ports": [
@@ -113,7 +115,7 @@ VARIANTS = {
         ],
     },
     "monitoring": {
-        "services": ["heplify-server", "cassandra"],
+        "services": ["heplify-server", "cassandra", "jaeger-collector", "jaeger-query"],
         "pm2": [],
         "ports": [
             (9060, "heplify HEP"),
