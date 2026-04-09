@@ -24,7 +24,29 @@ python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant
 
 # Test an SBC (combined sip+rtp)
 python test-jambonz-startup.py --host 10.0.2.10 --key ~/.ssh/my-key.pem --variant sip-rtp
+
+# Test a feature server, proxying SSH through the SBC
+python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant fs --jump 203.0.113.10
+
+# Proxy with different credentials for the jump host
+python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant fs \
+    --jump 203.0.113.10 --jump-user admin --jump-key ~/.ssh/sbc.pem
 ```
+
+**SSH jump host:**
+
+In deployments where only the SBC has public SSH access and other servers (feature server, web, monitoring, etc.) are on a private network, use `--jump` to tunnel SSH through the SBC:
+
+```bash
+# Same key and user for both hops
+python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/key.pem --variant fs --jump 203.0.113.10
+
+# Different credentials for the jump host
+python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/key.pem --variant fs \
+    --jump 203.0.113.10 --jump-user admin --jump-key ~/.ssh/sbc.pem
+```
+
+When `--jump-user` or `--jump-key` are omitted, they default to the values of `--user` and `--key` respectively.
 
 **Open-source builds:**
 
@@ -135,10 +157,13 @@ Results: 25/27 passed, 2 failed
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--host` | (required) | Instance IP or hostname |
-| `--key` | (required) | Path to SSH private key |
+| `--key` | (optional) | Path to SSH private key (uses default SSH key if omitted) |
 | `--user` | `jambonz` | SSH username |
 | `--variant` | `mini` | Instance variant to test |
 | `--oss` | off | Open-source build (different PM2 names, default user `admin`) |
+| `--jump` | (none) | SSH jump host to tunnel through (e.g. SBC public IP) |
+| `--jump-user` | same as `--user` | SSH user for the jump host |
+| `--jump-key` | same as `--key` | SSH key for the jump host |
 | `--timeout` | `300` | Timeout in seconds for cloud-init wait |
 
 ## Related repositories
