@@ -17,6 +17,13 @@ Usage:
 
     # All variants: mini, fs, sip, rtp, sip-rtp, web, web-monitoring, monitoring, recording
 
+    # Test a feature server, proxying SSH through the SBC
+    python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant fs --jump 203.0.113.10
+
+    # Proxy with different credentials for the jump host
+    python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant fs \
+        --jump 203.0.113.10 --jump-user admin --jump-key ~/.ssh/sbc.pem
+
     # Test an open-source build (different PM2 app names)
     python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant mini --oss
 """
@@ -140,8 +147,12 @@ VARIANTS = {
 }
 
 
-def run_ssh(host, key, user, command, timeout=30):
-    """Run a command over SSH. Returns (stdout, exit_code)."""
+def run_ssh(host, key, user, command, timeout=30,
+            proxy=None, proxy_key=None, proxy_user=None):
+    """Run a command over SSH, optionally through a proxy/jump host.
+
+    Returns (stdout, exit_code).
+    """
     cmd = [
         "ssh",
         "-o", "StrictHostKeyChecking=no",
@@ -149,6 +160,18 @@ def run_ssh(host, key, user, command, timeout=30):
         "-o", f"ConnectTimeout={timeout}",
         "-o", "LogLevel=ERROR",
     ]
+    if proxy:
+        proxy_cmd = (
+            "ssh -W %h:%p"
+            " -o StrictHostKeyChecking=no"
+            " -o UserKnownHostsFile=/dev/null"
+            " -o LogLevel=ERROR"
+        )
+        if proxy_key:
+            proxy_cmd += f" -i {proxy_key}"
+        p_user = proxy_user or user
+        proxy_cmd += f" {p_user}@{proxy}"
+        cmd += ["-o", f"ProxyCommand={proxy_cmd}"]
     if key:
         cmd += ["-i", key]
     cmd += [f"{user}@{host}", command]
@@ -179,6 +202,12 @@ def main():
                         help="Instance variant (default: mini)")
     parser.add_argument("--oss", action="store_true",
                         help="Open-source build (different PM2 app names)")
+    parser.add_argument("--jump",
+                        help="SSH jump host (e.g. SBC public IP) to tunnel through")
+    parser.add_argument("--jump-user",
+                        help="SSH user for jump host (default: same as --user)")
+    parser.add_argument("--jump-key",
+                        help="SSH key for jump host (default: same as --key)")
     parser.add_argument("--timeout", type=int, default=300,
                         help="Timeout for cloud-init wait (default: 300)")
     args = parser.parse_args()
@@ -203,11 +232,16 @@ def main():
         else:
             failed += 1
 
-    ssh = lambda cmd, t=30: run_ssh(args.host, args.key, args.user, cmd, t)
+    ssh = lambda cmd, t=30: run_ssh(args.host, args.key, args.user, cmd, t,
+                                     proxy=args.jump,
+                                     proxy_key=args.jump_key,
+                                     proxy_user=args.jump_user)
 
     print("=" * 60)
     edition = "oss" if args.oss else "commercial"
     print(f"jambonz {args.variant} ({edition}) startup test — {args.host}")
+    if args.jump:
+        print(f"  (proxying through {args.jump})")
     print("=" * 60)
 
     # 1. SSH connectivity
@@ -255,12 +289,24 @@ def main():
             tally("pm2 accessible", False, "pm2 jlist failed")
 
     # 5. Key ports listening
-    if variant["ports"]:
+    ports = variant["ports"]
+    # When proxying to web/web-monitoring, HTTPS is terminated at the load
+    # balancer so port 443 won't be listening on the instance.  Replace the
+    # port 443 check with an nginx config validation.
+    skip_443 = (args.jump and args.variant in ("web", "web-monitoring"))
+    if skip_443:
+        ports = [(p, l) for p, l in ports if p != 443]
+    if ports:
         print("\n--- Ports ---")
         out, rc = ssh("sudo ss -tlnp 2>/dev/null || sudo netstat -tlnp 2>/dev/null")
-        for port, label in variant["ports"]:
+        for port, label in ports:
             listening = f":{port} " in out or f":{port}\t" in out
             tally(f"port {port} ({label})", listening)
+    if skip_443:
+        print("\n--- Nginx Config (HTTPS via ALB) ---")
+        out, rc = ssh("sudo nginx -t 2>&1")
+        ok = rc == 0 and "syntax is ok" in out
+        tally("nginx config valid", ok, out.strip().split('\n')[0] if not ok else "")
 
     # Summary
     print("\n" + "=" * 60)
