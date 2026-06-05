@@ -1,24 +1,31 @@
 #!/usr/bin/env python3
 """
-Standalone test for jambonz instance startup verification.
+Standalone test for jambonz mini instance startup verification.
 
 Tests that cloud-init completed, system services are running,
-PM2 apps are online, and key ports are listening.
+jambonz apps are online (PM2 or systemd), and key ports are listening.
+
+This script is designed and tested for jambonz mini deployments.
+Other variants (fs, sip-rtp, etc.) are included for convenience but
+may require adjustments for specific deployment configurations.
 
 Usage:
-    # Test a mini (default)
-    python test-mini.py --host 13.36.97.68 --key ~/.ssh/my-key.pem
+    # Test a mini instance (AMI/packer build with PM2)
+    python test-jambonz-startup.py --host 13.36.97.68 --key ~/.ssh/my-key.pem
 
-    # Test a feature server
-    python test-mini.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant fs
+    # Test a mini instance (Debian package install with systemd)
+    python test-jambonz-startup.py --host 13.36.97.68 --package
 
-    # Test an SBC (combined sip+rtp)
-    python test-mini.py --host 10.0.2.10 --key ~/.ssh/my-key.pem --variant sip-rtp
+    # Using default SSH key (from ssh-agent or ~/.ssh/id_rsa)
+    python test-jambonz-startup.py --host 13.36.97.68
 
-    # All variants: mini, fs, sip, rtp, sip-rtp, web, web-monitoring, monitoring, recording
+    # Test an open-source mini build (different app names)
+    python test-jambonz-startup.py --host 13.36.97.68 --oss
 
-    # Test an open-source build (different PM2 app names)
-    python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant mini --oss
+Requirements:
+    - Python 3.6+
+    - SSH access to the target instance
+    - The jambonz user must exist on the target (or admin user with --oss)
 """
 
 import argparse
@@ -35,14 +42,15 @@ OSS_PM2_NAMES = {
     "outbound": "sbc-outbound",
 }
 
-# Per-variant definitions: system services, PM2 apps, listening ports
+# Per-variant definitions for AMI/packer builds (PM2-based)
+# Note: The 'mini' variant is the primary tested configuration.
 VARIANTS = {
     "mini": {
         "services": [
             "nginx", "drachtio", "freeswitch", "rtpengine",
-            "mysql", "redis-server", "influxdb", "telegraf",
-            "heplify-server", "cassandra",
-            "jaeger-collector", "jaeger-query",
+            "mariadb", "redis-server", "influxdb", "telegraf",
+            "grafana-server", "heplify-server", "pcap-server",
+            "cassandra", "jaeger-collector", "jaeger-query",
         ],
         "pm2": [
             "api-server", "webapp", "feature-server",
@@ -54,13 +62,14 @@ VARIANTS = {
             (443, "nginx HTTPS"),
             (3002, "api-server"),
             (3000, "feature-server"),
+            (4000, "sbc-call-router"),
             (5060, "SIP UDP/TCP"),
             (8443, "SIP WSS"),
             (9022, "drachtio"),
         ],
     },
     "fs": {
-        "services": ["drachtio", "freeswitch"],
+        "services": ["drachtio", "freeswitch", "telegraf"],
         "pm2": ["feature-server"],
         "ports": [
             (3000, "feature-server"),
@@ -69,7 +78,7 @@ VARIANTS = {
         ],
     },
     "sip": {
-        "services": ["drachtio"],
+        "services": ["drachtio", "telegraf"],
         "pm2": [
             "sbc-call-router", "sbc-sip-sidecar",
             "outbound", "inbound",
@@ -82,12 +91,12 @@ VARIANTS = {
         ],
     },
     "rtp": {
-        "services": ["rtpengine"],
+        "services": ["rtpengine", "telegraf"],
         "pm2": ["sbc-rtpengine-sidecar"],
         "ports": [],
     },
     "sip-rtp": {
-        "services": ["drachtio", "rtpengine"],
+        "services": ["drachtio", "rtpengine", "telegraf"],
         "pm2": [
             "sbc-call-router", "sbc-sip-sidecar", "sbc-rtpengine-sidecar",
             "outbound", "inbound",
@@ -100,43 +109,62 @@ VARIANTS = {
         ],
     },
     "web": {
-        "services": ["nginx"],
+        "services": ["nginx", "telegraf"],
         "pm2": ["api-server", "webapp"],
         "ports": [
             (80, "nginx HTTP"),
             (443, "nginx HTTPS"),
-            (3000, "api-server"),
+            (3002, "api-server"),
         ],
     },
     "web-monitoring": {
         "services": [
             "nginx", "influxdb", "telegraf", "grafana-server",
-            "heplify-server", "cassandra",
+            "heplify-server", "pcap-server", "cassandra",
             "jaeger-collector", "jaeger-query",
         ],
         "pm2": ["api-server", "webapp"],
         "ports": [
             (80, "nginx HTTP"),
             (443, "nginx HTTPS"),
-            (3000, "api-server"),
-            (3010, "grafana"),
+            (3002, "api-server"),
             (9080, "homer"),
         ],
     },
     "monitoring": {
-        "services": ["heplify-server", "cassandra", "jaeger-collector", "jaeger-query"],
+        "services": [
+            "influxdb", "telegraf", "grafana-server",
+            "heplify-server", "pcap-server", "cassandra",
+            "jaeger-collector", "jaeger-query",
+        ],
         "pm2": [],
         "ports": [
             (9060, "heplify HEP"),
+            (9080, "homer"),
         ],
     },
     "recording": {
-        "services": ["upload_recordings"],
-        "pm2": [],
+        "services": ["telegraf"],
+        "pm2": ["upload-recordings"],
         "ports": [
-            (3000, "upload_recordings"),
+            (3000, "upload-recordings"),
         ],
     },
+}
+
+# Debian package installs use systemd services instead of PM2
+# These are the jambonz app services (in addition to base services)
+PACKAGE_JAMBONZ_SERVICES = {
+    "mini": [
+        "jambonz-api-server", "jambonz-feature-server",
+        "jambonz-sbc-call-router", "jambonz-sbc-sip-sidecar",
+        "jambonz-sbc-rtpengine-sidecar", "jambonz-inbound", "jambonz-outbound",
+    ],
+}
+
+# Service name overrides for package installs
+PACKAGE_SERVICE_OVERRIDES = {
+    "drachtio": "drachtio-5070",  # Package uses drachtio-5070, not drachtio
 }
 
 
@@ -170,27 +198,52 @@ def check(label, passed, detail=""):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test jambonz instance startup")
+    parser = argparse.ArgumentParser(
+        description="Test jambonz mini instance startup",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --host 13.36.97.68 --key ~/.ssh/my-key.pem
+  %(prog)s --host 13.36.97.68                          # use default SSH key
+  %(prog)s --host 13.36.97.68 --package                # Debian package install
+  %(prog)s --host 13.36.97.68 --oss                    # open-source build
+  %(prog)s --host 10.0.1.5 --variant fs                # feature server
+        """
+    )
     parser.add_argument("--host", required=True, help="Instance IP or hostname")
-    parser.add_argument("--key", help="Path to SSH private key (omit to use default SSH key)")
+    parser.add_argument("--key", help="Path to SSH private key (omit to use default)")
     parser.add_argument("--user", help="SSH user (default: jambonz, or admin with --oss)")
     parser.add_argument("--variant", default="mini",
                         choices=list(VARIANTS.keys()),
                         help="Instance variant (default: mini)")
     parser.add_argument("--oss", action="store_true",
-                        help="Open-source build (different PM2 app names)")
+                        help="Open-source build (different app names)")
+    parser.add_argument("--package", action="store_true",
+                        help="Debian package install (apps run as systemd, not PM2)")
     parser.add_argument("--timeout", type=int, default=300,
-                        help="Timeout for cloud-init wait (default: 300)")
+                        help="Timeout for cloud-init wait in seconds (default: 300)")
     args = parser.parse_args()
 
     if args.user is None:
         args.user = "admin" if args.oss else "jambonz"
 
     variant = VARIANTS[args.variant]
+
+    # Build the services list
+    services = list(variant["services"])
+
+    # Apply package-specific overrides
+    if args.package:
+        services = [PACKAGE_SERVICE_OVERRIDES.get(s, s) for s in services]
+        # Add jambonz app services (they run as systemd instead of PM2)
+        if args.variant in PACKAGE_JAMBONZ_SERVICES:
+            services.extend(PACKAGE_JAMBONZ_SERVICES[args.variant])
+
     # Remap PM2 names for open-source builds
+    pm2_apps = list(variant["pm2"])
     if args.oss:
-        variant = dict(variant)
-        variant["pm2"] = [OSS_PM2_NAMES.get(name, name) for name in variant["pm2"]]
+        pm2_apps = [OSS_PM2_NAMES.get(name, name) for name in pm2_apps]
+
     passed = 0
     failed = 0
     total = 0
@@ -207,7 +260,8 @@ def main():
 
     print("=" * 60)
     edition = "oss" if args.oss else "commercial"
-    print(f"jambonz {args.variant} ({edition}) startup test — {args.host}")
+    install_type = "package" if args.package else "AMI"
+    print(f"jambonz {args.variant} ({edition}, {install_type}) — {args.host}")
     print("=" * 60)
 
     # 1. SSH connectivity
@@ -224,20 +278,20 @@ def main():
     if "status: done" in out.lower():
         tally("cloud-init completed", True)
     elif "no cloud-init" in out:
-        tally("cloud-init completed", False, "cloud-init not available")
+        tally("cloud-init completed", True, "cloud-init not present (bare metal?)")
     else:
         tally("cloud-init completed", False, out.strip()[:80])
 
     # 3. System services
-    if variant["services"]:
+    if services:
         print("\n--- System Services ---")
-        for svc in variant["services"]:
+        for svc in services:
             out, rc = ssh(f"systemctl is-active {svc} 2>/dev/null")
             status = out.strip()
             tally(svc, status == "active", status)
 
-    # 4. PM2 services
-    if variant["pm2"]:
+    # 4. PM2 services (only for AMI/packer builds, not package installs)
+    if pm2_apps and not args.package:
         print("\n--- PM2 Services ---")
         out, rc = ssh("pm2 jlist 2>/dev/null")
         if rc == 0:
@@ -248,7 +302,7 @@ def main():
             except (json.JSONDecodeError, KeyError):
                 pm2_status = {}
 
-            for svc in variant["pm2"]:
+            for svc in pm2_apps:
                 status = pm2_status.get(svc, "not found")
                 tally(f"pm2: {svc}", status == "online", status)
         else:
