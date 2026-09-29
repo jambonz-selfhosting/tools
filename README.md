@@ -142,6 +142,37 @@ python test-jambonz-startup.py --host 10.0.1.5 --key ~/.ssh/my-key.pem --variant
 Migrates certbot from snap to apt installation (for older AMIs that used snap).
 
 ## Related Repositories
+### cloudwatch-queries/
+
+Saved CloudWatch Logs Insights queries for jambonz.cloud (us-east-1), kept as code so they are
+reviewed and can't drift in the console. `queries.json` is the source of truth;
+`sync-queries.py` pushes it to the account.
+
+| Saved query | Log groups | Parameter |
+|---|---|---|
+| `jambonz.cloud/Call by call_sid` | feature-server | `call_sid` |
+| `jambonz.cloud/SBC call by SIP Call-ID` | inbound, outbound | `sip_callid` |
+| `jambonz.cloud/Calls for an account` | feature-server | `account_sid` (one row per call) |
+| `jambonz.cloud/Calls to or from a number` | feature-server, inbound, outbound | `number` (digits, no `+`) |
+
+In the console: Logs Insights → Saved queries → pick one → enter the parameter → **set the
+time range to the call's time, not days**. Insights bills per GB scanned, so the time range is
+the cost.
+
+The inbound and outbound apps log against the SIP `Call-ID`, not the `call_sid`, so
+"Call by call_sid" covers only the feature-server. Use the number query to get from a phone
+number to both keys.
+
+```bash
+python cloudwatch-queries/sync-queries.py            # dry run: show what would change
+python cloudwatch-queries/sync-queries.py --apply    # create/update the saved queries
+```
+
+Needs the AWS CLI with credentials for the jambonz.cloud account (`--profile` to choose one).
+Queries are matched by name. The script never deletes a query: saved queries under the
+`jambonz.cloud/` prefix that are not in `queries.json` are listed as `unmanaged` and left alone.
+
+## Related repositories
 
 - [jambonz-selfhosting/packer](https://github.com/jambonz-selfhosting/packer) - AMI/image build scripts
 - [jambonz-selfhosting/cloudformation](https://github.com/jambonz-selfhosting/cloudformation) - AWS CloudFormation templates
