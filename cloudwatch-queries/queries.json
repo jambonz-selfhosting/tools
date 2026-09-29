@@ -1,0 +1,37 @@
+{
+  "namePrefix": "jambonz.cloud/",
+  "queries": [
+    {
+      "name": "jambonz.cloud/Call by call_sid",
+      "logGroupNames": ["jambonz-feature_server"],
+      "parameters": [
+        {"name": "call_sid", "description": "jambonz call_sid (uuid)"}
+      ],
+      "queryString": "fields @timestamp, @logStream, level, msg, @message\n| filter @message like \"{{call_sid}}\"\n| sort @timestamp asc\n| limit 10000"
+    },
+    {
+      "name": "jambonz.cloud/SBC call by SIP Call-ID",
+      "logGroupNames": ["jambonz-sbc-sip-inbound", "jambonz-sbc-sip"],
+      "parameters": [
+        {"name": "sip_callid", "description": "SIP Call-ID of the carrier leg (inbound and outbound apps log on this, not call_sid)"}
+      ],
+      "queryString": "fields @timestamp, @logStream, level, msg, @message\n| filter @message like \"{{sip_callid}}\"\n| sort @timestamp asc\n| limit 10000"
+    },
+    {
+      "name": "jambonz.cloud/Calls for an account",
+      "logGroupNames": ["jambonz-feature_server"],
+      "parameters": [
+        {"name": "account_sid", "description": "account_sid (uuid); keep the time range tight"}
+      ],
+      "queryString": "filter @message like \"{{account_sid}}\"\n| stats min(@timestamp) as first_seen, max(@timestamp) as last_seen, count(*) as lines by callSid\n| sort first_seen desc\n| limit 1000"
+    },
+    {
+      "name": "jambonz.cloud/Calls to or from a number",
+      "logGroupNames": ["jambonz-feature_server", "jambonz-sbc-sip-inbound", "jambonz-sbc-sip"],
+      "parameters": [
+        {"name": "number", "description": "digits only, no leading + (logs carry 14795009140, not +14795009140)"}
+      ],
+      "queryString": "fields @timestamp, @logStream, callSid, callId, msg\n| filter @message like \"{{number}}\"\n| sort @timestamp asc\n| limit 10000"
+    }
+  ]
+}
